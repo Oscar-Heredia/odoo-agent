@@ -34,9 +34,19 @@ Para leer la estructura de una base, la clave API tiene que ser de un administra
 
 `ask_odoo_ai` llama a `ai.agent.get_direct_response`, un método público de la app IA de Odoo 19, sobre un agente IA de la propia base. No crea chats.
 
-Es la única llamada que no es pura lectura. Por eso solo se consulta a un agente cuyos temas y herramientas estén en la lista blanca de solo lectura, en `review.py`, que sale del código de enterprise. Mientras esa lista esté vacía, solo se consulta a agentes sin temas.
+Es la única llamada que no es pura lectura. Por eso solo se consulta a un agente cuyos temas y herramientas estén en la lista blanca de solo lectura de `review.py`:
 
-Si no hay agente válido, si el método no existe en esa versión o si la llamada tarda más de 100 s, devuelve el texto para pegarlo a mano en el chat de la IA. La propuesta queda **PENDIENTE DE COTEJO**.
+- **Temas:** los dos de serie de Ask AI, «Natural Language Search» e «Information retrieval».
+- **Herramientas:** sus 10 herramientas de serie, que buscan, agrupan, leen campos y abren vistas. Cada una solo cuenta si su código en la base es exactamente la llamada de serie a su método `_ai_tool_*`. Si alguien la edita, el agente deja de considerarse de solo lectura.
+
+Orden de preferencia:
+1. El agente que fije el perfil (`ai_agent` u `ODOO_AI_AGENT`).
+2. Un agente con temas de solo lectura, como Ask AI, porque puede consultar la base.
+3. «Default Agent», que no tiene temas y responde sin ver los datos.
+
+Si el primero falla, por ejemplo porque Gemini no contesta en los 30 s que espera Odoo, se prueba el siguiente dentro de un presupuesto total de 100 s. La respuesta dice qué agente contestó y si podía leer la base.
+
+Si no hay agente válido, si el método no existe en esa versión o si se agota el tiempo, devuelve el texto para pegarlo a mano en el chat de la IA. La propuesta queda **PENDIENTE DE COTEJO**.
 
 ## Instalación
 

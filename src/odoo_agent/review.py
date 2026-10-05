@@ -7,6 +7,8 @@ blanca de solo lectura. Si no hay ninguno, o la llamada falla, se devuelve el
 texto para que el usuario lo pegue a mano en el chat de la IA (modo manual).
 """
 
+import re
+import time
 from dataclasses import dataclass, field
 
 from .odoo import OdooClient, OdooError
@@ -14,12 +16,33 @@ from .odoo import OdooClient, OdooError
 # Por debajo de los 120 s a partir de los cuales Claude Code pasa una llamada MCP
 # a segundo plano (y el agente seguiría sin esperar la respuesta).
 AI_TIMEOUT = 100.0
-# Temas y herramientas de serie que solo leen, por xmlid. Salen del código de
-# enterprise de cada versión (docs/spike.md). Vacías: solo se consulta a agentes
-# sin temas.
-READONLY_TOPICS: frozenset[str] = frozenset()
-READONLY_TOOLS: frozenset[str] = frozenset()
-# Si el perfil no fija `ai_agent`, se prefiere este agente de serie.
+# Tiempo mínimo que merece un agente de respaldo; con menos, mejor el modo manual.
+MIN_ATTEMPT = 20.0
+# Temas de serie de Ask AI (`ai.ai_agent_natural_language_search`) cuyas
+# herramientas solo leen o abren vistas. Comprobado en pruebas11-grupogr (19.0+e)
+# el 2026-10-05 (docs/spike.md).
+READONLY_TOPICS = frozenset({
+    "ai.ai_topic_natural_language_query",
+    "ai.ai_topic_information_retrieval_query",
+})
+# Herramienta de serie -> el único método que puede llamar. El código de cada
+# herramienta se compara con esa llamada: una herramienta editada en la base deja
+# de contar como de solo lectura aunque conserve el xmlid. Los métodos `_ai_tool_*`
+# viven en enterprise/ai; su cuerpo está pendiente de leer (docs/spike.md).
+READONLY_TOOLS = {
+    "ai.ir_actions_server_adjust_search": "_ai_tool_adjust_search",
+    "ai.ir_actions_server_compute_report_measures": "_ai_tool_compute_report_measures",
+    "ai.ir_actions_server_get_fields": "_ai_tool_get_fields",
+    "ai.ir_actions_server_get_menu_details": "_ai_tool_get_menu_details",
+    "ai.ir_actions_server_open_menu_graph": "_ai_tool_open_menu_graph",
+    "ai.ir_actions_server_open_menu_kanban": "_ai_tool_open_menu_kanban",
+    "ai.ir_actions_server_open_menu_list": "_ai_tool_open_menu_list",
+    "ai.ir_actions_server_open_menu_pivot": "_ai_tool_open_menu_pivot",
+    "ai.ir_actions_server_read_group": "_ai_tool_read_group",
+    "ai.ir_actions_server_search": "_ai_tool_search",
+}
+# Si el perfil no fija `ai_agent`, se prefiere un agente que pueda leer la base
+# (temas de solo lectura) y, después, este agente de serie sin temas.
 DEFAULT_AGENT_XMLID = "ai.ai_default_agent"
 
 REVIEW_FORMAT = """Revisa cada paso y contesta exactamente con este formato:
@@ -56,6 +79,12 @@ async def check_agents(client: OdooClient) -> list[AgentCheck]:
         topics = {row["id"]: row for row in rows}
     tool_ids = sorted({tool_id for topic in topics.values() for tool_id in topic["tool_ids"]})
     xmlids = await _xmlids(client, {"ai.agent": [a["id"] for a in agents], "ai.topic": topic_ids, "ir.actions.server": tool_ids})
+    code = {}
+    if tool_ids:
+        rows = await client.read(
+            "ir.actions.server", "search_read", {"domain": [["id", "in", tool_ids]], "fields": ["code"], "limit": 500}
+        )
+        code = {row["id"]: row["code"] or "" for row in rows}
 
     checks = []
     for agent in agents:
@@ -73,10 +102,19 @@ async def check_agents(client: OdooClient) -> list[AgentCheck]:
                 check.problems.append(f"el tema «{name}» no está verificado como de solo lectura")
                 continue
             for tool_id in topic["tool_ids"]:
-                if xmlids.get(("ir.actions.server", tool_id)) not in READONLY_TOOLS:
+                method = READONLY_TOOLS.get(xmlids.get(("ir.actions.server", tool_id)))
+                if method is None:
                     check.problems.append(f"el tema «{name}» tiene una herramienta (acción {tool_id}) que no es de serie de solo lectura")
+                elif not is_standard_tool_code(code.get(tool_id, ""), method):
+                    check.problems.append(f"la herramienta {tool_id} del tema «{name}» no tiene el código de serie (llamar a {method})")
         checks.append(check)
     return checks
+
+
+def is_standard_tool_code(code: str, method: str) -> bool:
+    """Si el código es solo `ai['result'] = record.<method>(argumentos)`, como en enterprise."""
+    pattern = rf"ai\[['\"]result['\"]\]\s*=\s*record\.{re.escape(method)}\(\s*[\w\s,]*\)"
+    return re.fullmatch(pattern, code.strip()) is not None
 
 
 async def ask(
@@ -96,34 +134,51 @@ async def ask(
             "SIN COTEJO POSIBLE: esta base no tiene la app IA. Entrega la propuesta marcada como NO COTEJADA."
         )
     try:
-        agent, reason = await pick_agent(client)
+        agents, reason = await pick_agents(client)
     except OdooError as e:
-        agent, reason = None, f"no se pudieron revisar los agentes IA ({e})"
-    if agent is None:
+        agents, reason = [], f"no se pudieron revisar los agentes IA ({e})"
+    if not agents:
         return manual(reason, context_message, prompt)
-    try:
-        replies = await client.direct_response(agent.id, prompt, context_message, AI_TIMEOUT)
-    except OdooError as e:
-        return manual(f"la consulta al agente «{agent.name}» falló: {e}", context_message, prompt)
-    answer = "\n\n".join(r for r in replies if isinstance(r, str)) if isinstance(replies, list) else str(replies)
-    return f"COTEJO AUTOMÁTICO con el agente IA «{agent.name}» (id {agent.id}) de esta base.\n\n{answer}"
+    failures = []
+    # AI_TIMEOUT es el presupuesto de toda la consulta, no de cada agente.
+    deadline = time.monotonic() + AI_TIMEOUT
+    for agent in agents:
+        remaining = deadline - time.monotonic()
+        if remaining < MIN_ATTEMPT:
+            failures.append(f"«{agent.name}»: sin tiempo para intentarlo")
+            break
+        try:
+            replies = await client.direct_response(agent.id, prompt, context_message, remaining)
+        except OdooError as e:
+            # Ask AI llama a Gemini con 30 s de espera dentro de Odoo; si no llega,
+            # se prueba el siguiente agente antes de pasar a modo manual.
+            failures.append(f"«{agent.name}»: {e}")
+            continue
+        answer = "\n\n".join(r for r in replies if isinstance(r, str)) if isinstance(replies, list) else str(replies)
+        reads = "puede leer la base" if agent.topics else "sin acceso a datos: responde con lo que sabe de Odoo"
+        header = f"COTEJO AUTOMÁTICO con el agente IA «{agent.name}» (id {agent.id}) de esta base; {reads}."
+        if failures:
+            header += f"\nAntes falló: {'; '.join(failures)}."
+        return f"{header}\n\n{answer}"
+    return manual(f"la consulta falló con todos los agentes válidos ({'; '.join(failures)})", context_message, prompt)
 
 
-async def pick_agent(client: OdooClient) -> tuple[AgentCheck | None, str]:
+async def pick_agents(client: OdooClient) -> tuple[list[AgentCheck], str]:
+    """Agentes que se pueden consultar, en orden de preferencia; o ninguno y el motivo."""
     checks = await check_agents(client)
     wanted = client.profile.ai_agent
     if wanted:
         match = next((c for c in checks if c.name == wanted), None)
         if match is None:
-            return None, f"no existe el agente IA «{wanted}» que indica el perfil"
+            return [], f"no existe el agente IA «{wanted}» que indica el perfil"
         if not match.usable:
-            return None, f"el agente IA «{wanted}» no pasa la revisión: {'; '.join(match.problems)}"
-        return match, ""
-    usable = sorted((c for c in checks if c.usable), key=lambda c: (c.xmlid != DEFAULT_AGENT_XMLID, c.id))
+            return [], f"el agente IA «{wanted}» no pasa la revisión: {'; '.join(match.problems)}"
+        return [match], ""
+    usable = sorted((c for c in checks if c.usable), key=lambda c: (not c.topics, c.xmlid != DEFAULT_AGENT_XMLID, c.id))
     if not usable:
         details = "; ".join(f"«{c.name}»: {', '.join(c.problems)}" for c in checks) or "no hay agentes IA"
-        return None, f"ningún agente IA pasa la revisión de solo lectura ({details})"
-    return usable[0], ""
+        return [], f"ningún agente IA pasa la revisión de solo lectura ({details})"
+    return usable, ""
 
 
 def build_prompt(problem: str, steps: list[str], evidence: str, previous_review: str | None) -> str:
