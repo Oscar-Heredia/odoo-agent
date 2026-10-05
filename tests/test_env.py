@@ -6,13 +6,13 @@ import pytest
 from odoo_agent.odoo import OdooError, Session, load_env
 
 ENV = """\
-# Proyecto de prueba
+# Test project
 ODOO_PROFILE=acme-test
 ODOO_URL="https://acme.odoo.com/"
 ODOO_HOSTING=online      # online | odoo.sh | onpremise
 ODOO_ENV='test'
 # ODOO_DB=acme
-ODOO_API_KEY=clave123
+ODOO_API_KEY=key123
 """
 
 
@@ -22,9 +22,9 @@ def write_env(tmp_path, text=ENV):
     return path
 
 
-def test_lee_perfil_y_clave_con_comentarios_y_comillas(tmp_path):
+def test_reads_profile_and_key_with_comments_and_quotes(tmp_path):
     profile, key = load_env(write_env(tmp_path))
-    assert key == "clave123"
+    assert key == "key123"
     assert profile.name == "acme-test"
     assert profile.url == "https://acme.odoo.com"
     assert profile.hosting == "online"
@@ -32,22 +32,22 @@ def test_lee_perfil_y_clave_con_comentarios_y_comillas(tmp_path):
     assert profile.db is None
 
 
-def test_sin_nombre_usa_el_de_la_carpeta(tmp_path):
+def test_without_a_name_uses_the_folder_name(tmp_path):
     profile, _ = load_env(write_env(tmp_path, ENV.replace("ODOO_PROFILE=acme-test\n", "")))
     assert profile.name == tmp_path.name
 
 
-def test_exige_la_clave_api(tmp_path):
+def test_requires_the_api_key(tmp_path):
     with pytest.raises(OdooError, match="ODOO_API_KEY"):
-        load_env(write_env(tmp_path, ENV.replace("clave123", "")))
+        load_env(write_env(tmp_path, ENV.replace("key123", "")))
 
 
-def test_rechaza_hosting_desconocido(tmp_path):
+def test_rejects_unknown_hosting(tmp_path):
     with pytest.raises(OdooError, match="ODOO_HOSTING"):
-        load_env(write_env(tmp_path, ENV.replace("online", "nube")))
+        load_env(write_env(tmp_path, ENV.replace("online", "cloud")))
 
 
-def test_la_sesion_se_fija_al_perfil_del_env(tmp_path):
+def test_the_session_is_pinned_to_the_env_profile(tmp_path):
     seen = {}
 
     def handler(request):
@@ -59,13 +59,13 @@ def test_la_sesion_se_fija_al_perfil_del_env(tmp_path):
     client = session.current()
     asyncio.run(client.version())
     assert client.profile.name == "acme-test"
-    assert seen == {"auth": "bearer clave123", "url": "https://acme.odoo.com/json/version"}
-    with pytest.raises(OdooError, match="abre otra sesión"):
-        session.bind("otro")
+    assert seen == {"auth": "bearer key123", "url": "https://acme.odoo.com/json/version"}
+    with pytest.raises(OdooError, match="open another session"):
+        session.bind("other")
 
 
-def test_un_env_sin_clave_falla_al_usarlo_y_se_puede_corregir(tmp_path):
-    path = write_env(tmp_path, ENV.replace("clave123", ""))
+def test_an_env_without_a_key_fails_on_use_and_can_be_fixed(tmp_path):
+    path = write_env(tmp_path, ENV.replace("key123", ""))
     session = Session(env_path=path)
     with pytest.raises(OdooError, match="ODOO_API_KEY"):
         session.current()

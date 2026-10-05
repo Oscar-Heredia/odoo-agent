@@ -1,9 +1,9 @@
-"""Prueba de humo contra una base real, usando las mismas herramientas que el agente.
+"""Smoke test against a real database, using the same tools as the agent.
 
-    .venv/bin/python scripts/smoke.py <perfil> [--cotejo]
+    .venv/bin/python scripts/smoke.py <profile> [--review]
 
-Usa una base de prueba o staging. Con --cotejo hace además una consulta
-trivial a la IA de la base (en Odoo 20 gasta créditos).
+Use a test or staging database. With --review it also sends a trivial query to
+the database's AI (in Odoo 20 this spends credits).
 """
 
 import asyncio
@@ -22,7 +22,7 @@ async def step(label, coro):
     except ToolError as e:
         print(f"ERROR {label}: {e}")
         return None
-    print(f"OK    {label} ({time.monotonic() - start:.1f} s, {len(result)} caracteres)")
+    print(f"OK    {label} ({time.monotonic() - start:.1f} s, {len(result)} characters)")
     return result
 
 
@@ -34,22 +34,22 @@ async def main(profile: str, with_review: bool) -> int:
     await step("search_read res.partner", server.search_read("res.partner", ["name", "email"], limit=3))
     await step("search_read count_only", server.search_read("res.partner", ["id"], count_only=True))
     await step("fields res.partner", server.fields("res.partner", field_names=["name", "email"]))
-    await step("model_info res.partner (filtro email)", server.model_info("res.partner", name_filter="email"))
+    await step("model_info res.partner (email filter)", server.model_info("res.partner", name_filter="email"))
     await step("get_view res.partner form", server.get_view("res.partner", "form"))
-    await step("group_by res.partner por país", server.group_by("res.partner", ["country_id"], limit=5))
+    await step("group_by res.partner by country", server.group_by("res.partner", ["country_id"], limit=5))
     try:
         await server.search_read("res.users", ["login", "password"])
-        print("FALLO el guard: dejó pedir password")
+        print("FAIL  the guard allowed reading password")
         return 1
     except ToolError:
-        print("OK    el guard rechaza leer password")
+        print("OK    the guard rejects reading password")
     if with_review:
         answer = await step(
-            "ask_odoo_ai (consulta trivial)",
+            "ask_odoo_ai (trivial query)",
             server.ask_odoo_ai(
-                problem="Prueba de conexión del cotejo.",
-                steps=["No hacer nada: es una prueba."],
-                evidence="Ninguna.",
+                problem="Connection test of the review.",
+                steps=["Do nothing: this is a test."],
+                evidence="None.",
                 models=["res.partner"],
             ),
         )
@@ -61,4 +61,4 @@ async def main(profile: str, with_review: bool) -> int:
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    sys.exit(asyncio.run(main(sys.argv[1], "--cotejo" in sys.argv)))
+    sys.exit(asyncio.run(main(sys.argv[1], "--review" in sys.argv)))

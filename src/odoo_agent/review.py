@@ -1,10 +1,10 @@
-"""Cotejo con la IA de la propia base: `ai.agent.get_direct_response` (app IA de Odoo).
+"""Cross-check with the database's own AI: `ai.agent.get_direct_response` (Odoo AI app).
 
-Es la única llamada que no es pura lectura: corre en una transacción que se
-confirma, y el agente IA puede usar las herramientas de sus temas. Por eso solo
-se consulta a un agente cuyos temas y herramientas estén todos en la lista
-blanca de solo lectura. Si no hay ninguno, o la llamada falla, se devuelve el
-texto para que el usuario lo pegue a mano en el chat de la IA (modo manual).
+It is the only call that is not a pure read: it runs in a transaction that gets
+committed, and the AI agent can use the tools of its topics. That is why an
+agent is only queried if all its topics and tools are on the read-only
+whitelist. If there is none, or the call fails, the text is returned for the
+user to paste by hand into the AI chat (manual mode).
 """
 
 import re
@@ -13,22 +13,22 @@ from dataclasses import dataclass, field
 
 from .odoo import OdooClient, OdooError
 
-# Por debajo de los 120 s a partir de los cuales Claude Code pasa una llamada MCP
-# a segundo plano (y el agente seguiría sin esperar la respuesta).
+# Below the 120 s after which Claude Code moves an MCP call to the background (and
+# the agent would carry on without waiting for the answer).
 AI_TIMEOUT = 100.0
-# Tiempo mínimo que merece un agente de respaldo; con menos, mejor el modo manual.
+# Minimum time worth giving a fallback agent; with less, manual mode is better.
 MIN_ATTEMPT = 20.0
-# Temas de serie de Ask AI (`ai.ai_agent_natural_language_search`) cuyas
-# herramientas solo leen o abren vistas. Comprobado en pruebas11-grupogr (19.0+e)
-# el 2026-10-05 (docs/spike.md).
+# Standard topics of Ask AI (`ai.ai_agent_natural_language_search`) whose tools only
+# read or open views. Checked on pruebas11-grupogr (19.0+e) on 2026-10-05
+# (docs/spike.md).
 READONLY_TOPICS = frozenset({
     "ai.ai_topic_natural_language_query",
     "ai.ai_topic_information_retrieval_query",
 })
-# Herramienta de serie -> el único método que puede llamar. El código de cada
-# herramienta se compara con esa llamada: una herramienta editada en la base deja
-# de contar como de solo lectura aunque conserve el xmlid. Los métodos `_ai_tool_*`
-# viven en enterprise/ai; su cuerpo está pendiente de leer (docs/spike.md).
+# Standard tool -> the only method it may call. Each tool's code is compared with
+# that call: a tool edited in the database stops counting as read-only even if it
+# keeps its xmlid. The `_ai_tool_*` methods live in enterprise/ai; reading their
+# bodies is still pending (docs/spike.md).
 READONLY_TOOLS = {
     "ai.ir_actions_server_adjust_search": "_ai_tool_adjust_search",
     "ai.ir_actions_server_compute_report_measures": "_ai_tool_compute_report_measures",
@@ -41,17 +41,17 @@ READONLY_TOOLS = {
     "ai.ir_actions_server_read_group": "_ai_tool_read_group",
     "ai.ir_actions_server_search": "_ai_tool_search",
 }
-# Si el perfil no fija `ai_agent`, se prefiere un agente que pueda leer la base
-# (temas de solo lectura) y, después, este agente de serie sin temas.
+# If the profile does not set `ai_agent`, an agent that can read the database
+# (read-only topics) is preferred, then this standard agent without topics.
 DEFAULT_AGENT_XMLID = "ai.ai_default_agent"
 
-REVIEW_FORMAT = """Revisa cada paso y contesta exactamente con este formato:
+REVIEW_FORMAT = """Review each step and answer in exactly this format:
 
-### Paso N: CORRECTO | CON REPAROS | INCORRECTO
-Motivo en una o dos frases. Si lo comprobaste en la base, di qué consultaste.
+### Step N: CORRECT | WITH CONCERNS | INCORRECT
+Reason in one or two sentences. If you checked it in the database, say what you queried.
 
-### Riesgos
-### Alternativa mejor (solo si la hay)"""
+### Risks
+### Better alternative (only if there is one)"""
 
 
 @dataclass
@@ -68,7 +68,7 @@ class AgentCheck:
 
 
 async def check_agents(client: OdooClient) -> list[AgentCheck]:
-    """Revisa los agentes IA de la base: cuáles se pueden consultar sin riesgo de escritura."""
+    """Checks the database's AI agents: which ones can be queried with no risk of writes."""
     agents = await client.read("ai.agent", "search_read", {"domain": [], "fields": ["name", "topic_ids"], "limit": 100})
     topic_ids = sorted({topic_id for agent in agents for topic_id in agent["topic_ids"]})
     topics = {}
@@ -99,20 +99,20 @@ async def check_agents(client: OdooClient) -> list[AgentCheck]:
             topic_xmlid = xmlids.get(("ai.topic", topic_id))
             name = topic["name"] if topic else f"id {topic_id}"
             if topic_xmlid not in READONLY_TOPICS:
-                check.problems.append(f"el tema «{name}» no está verificado como de solo lectura")
+                check.problems.append(f"topic «{name}» is not verified as read-only")
                 continue
             for tool_id in topic["tool_ids"]:
                 method = READONLY_TOOLS.get(xmlids.get(("ir.actions.server", tool_id)))
                 if method is None:
-                    check.problems.append(f"el tema «{name}» tiene una herramienta (acción {tool_id}) que no es de serie de solo lectura")
+                    check.problems.append(f"topic «{name}» has a tool (action {tool_id}) that is not a standard read-only one")
                 elif not is_standard_tool_code(code.get(tool_id, ""), method):
-                    check.problems.append(f"la herramienta {tool_id} del tema «{name}» no tiene el código de serie (llamar a {method})")
+                    check.problems.append(f"tool {tool_id} of topic «{name}» does not have the standard code (call {method})")
         checks.append(check)
     return checks
 
 
 def is_standard_tool_code(code: str, method: str) -> bool:
-    """Si el código es solo `ai['result'] = record.<method>(argumentos)`, como en enterprise."""
+    """Whether the code is only `ai['result'] = record.<method>(arguments)`, as in enterprise."""
     pattern = rf"ai\[['\"]result['\"]\]\s*=\s*record\.{re.escape(method)}\(\s*[\w\s,]*\)"
     return re.fullmatch(pattern, code.strip()) is not None
 
@@ -126,99 +126,97 @@ async def ask(
     models: list[str],
     previous_review: str | None = None,
 ) -> str:
-    """Pide su opinión a la IA de la base; si no se puede, devuelve el texto para el modo manual."""
+    """Asks the database's AI for its opinion; if that is not possible, returns the text for manual mode."""
     prompt = build_prompt(problem, steps, evidence, previous_review)
     context_message = build_context_message(facts, client.profile, models)
     if not facts.get("ai_installed", True):
-        return (
-            "SIN COTEJO POSIBLE: esta base no tiene la app IA. Entrega la propuesta marcada como NO COTEJADA."
-        )
+        return "NO REVIEW POSSIBLE: this database does not have the AI app. Deliver the proposal marked as NOT REVIEWED."
     try:
         agents, reason = await pick_agents(client)
     except OdooError as e:
-        agents, reason = [], f"no se pudieron revisar los agentes IA ({e})"
+        agents, reason = [], f"the AI agents could not be checked ({e})"
     if not agents:
         return manual(reason, context_message, prompt)
     failures = []
-    # AI_TIMEOUT es el presupuesto de toda la consulta, no de cada agente.
+    # AI_TIMEOUT is the budget for the whole review, not for each agent.
     deadline = time.monotonic() + AI_TIMEOUT
     for agent in agents:
         remaining = deadline - time.monotonic()
         if remaining < MIN_ATTEMPT:
-            failures.append(f"«{agent.name}»: sin tiempo para intentarlo")
+            failures.append(f"«{agent.name}»: no time left to try it")
             break
         try:
             replies = await client.direct_response(agent.id, prompt, context_message, remaining)
         except OdooError as e:
-            # Ask AI llama a Gemini con 30 s de espera dentro de Odoo; si no llega,
-            # se prueba el siguiente agente antes de pasar a modo manual.
+            # Ask AI calls Gemini with a 30 s timeout inside Odoo; if no answer comes,
+            # the next agent is tried before falling back to manual mode.
             failures.append(f"«{agent.name}»: {e}")
             continue
         answer = "\n\n".join(r for r in replies if isinstance(r, str)) if isinstance(replies, list) else str(replies)
-        reads = "puede leer la base" if agent.topics else "sin acceso a datos: responde con lo que sabe de Odoo"
-        header = f"COTEJO AUTOMÁTICO con el agente IA «{agent.name}» (id {agent.id}) de esta base; {reads}."
+        reads = "can read the database" if agent.topics else "no data access: answers from what it knows about Odoo"
+        header = f"AUTOMATIC REVIEW by AI agent «{agent.name}» (id {agent.id}) of this database; {reads}."
         if failures:
-            header += f"\nAntes falló: {'; '.join(failures)}."
+            header += f"\nFailed first: {'; '.join(failures)}."
         return f"{header}\n\n{answer}"
-    return manual(f"la consulta falló con todos los agentes válidos ({'; '.join(failures)})", context_message, prompt)
+    return manual(f"the query failed with every usable agent ({'; '.join(failures)})", context_message, prompt)
 
 
 async def pick_agents(client: OdooClient) -> tuple[list[AgentCheck], str]:
-    """Agentes que se pueden consultar, en orden de preferencia; o ninguno y el motivo."""
+    """Agents that can be queried, in order of preference; or none, with the reason."""
     checks = await check_agents(client)
     wanted = client.profile.ai_agent
     if wanted:
         match = next((c for c in checks if c.name == wanted), None)
         if match is None:
-            return [], f"no existe el agente IA «{wanted}» que indica el perfil"
+            return [], f"the AI agent «{wanted}» set in the profile does not exist"
         if not match.usable:
-            return [], f"el agente IA «{wanted}» no pasa la revisión: {'; '.join(match.problems)}"
+            return [], f"the AI agent «{wanted}» does not pass the check: {'; '.join(match.problems)}"
         return [match], ""
     usable = sorted((c for c in checks if c.usable), key=lambda c: (not c.topics, c.xmlid != DEFAULT_AGENT_XMLID, c.id))
     if not usable:
-        details = "; ".join(f"«{c.name}»: {', '.join(c.problems)}" for c in checks) or "no hay agentes IA"
-        return [], f"ningún agente IA pasa la revisión de solo lectura ({details})"
+        details = "; ".join(f"«{c.name}»: {', '.join(c.problems)}" for c in checks) or "there are no AI agents"
+        return [], f"no AI agent passes the read-only check ({details})"
     return usable, ""
 
 
 def build_prompt(problem: str, steps: list[str], evidence: str, previous_review: str | None) -> str:
     lines = [
-        "Revisión técnica de una propuesta de cambio para esta base de Odoo.",
+        "Technical review of a proposed change for this Odoo database.",
         "",
-        "## Problema",
+        "## Problem",
         problem.strip(),
         "",
-        "## Evidencia ya comprobada en la base",
+        "## Evidence already checked in the database",
         evidence.strip(),
         "",
-        "## Pasos propuestos",
+        "## Proposed steps",
         *(f"{number}. {step.strip()}" for number, step in enumerate(steps, 1)),
     ]
     if previous_review:
-        lines += ["", "## Tu revisión anterior y lo que se cambió", previous_review.strip()]
+        lines += ["", "## Your previous review and what was changed", previous_review.strip()]
     lines += ["", REVIEW_FORMAT]
     return "\n".join(lines)
 
 
 def build_context_message(facts: dict, profile, models: list[str]) -> str:
     return (
-        "Actúas como revisor técnico de Odoo para un desarrollador que aplicará los cambios él mismo. "
-        f"Base: Odoo {facts.get('version', '?')}, hosting {profile.hosting}, entorno {profile.env}. "
-        f"Modelos implicados: {', '.join(models) or 'no indicados'}. "
-        "Si tienes herramientas de lectura, úsalas para comprobar campos, registros o configuración; no modifiques nada. "
-        "Sé concreto y breve. Si no puedes comprobar algo, dilo en vez de suponerlo."
+        "You act as an Odoo technical reviewer for a developer who will apply the changes themselves. "
+        f"Database: Odoo {facts.get('version', '?')}, hosting {profile.hosting}, environment {profile.env}. "
+        f"Models involved: {', '.join(models) or 'not given'}. "
+        "If you have read tools, use them to check fields, records or configuration; do not modify anything. "
+        "Be concrete and brief. If you cannot check something, say so instead of assuming it."
     )
 
 
 def manual(reason: str, context_message: str, prompt: str) -> str:
     return (
-        "MODO MANUAL: PENDIENTE DE COTEJO.\n"
-        f"Motivo: {reason}.\n\n"
-        "Pide al usuario que pegue este texto en el chat de la IA de esta base (Conversaciones, con un agente IA) "
-        "y que te pegue la respuesta. Hasta entonces, la propuesta queda PENDIENTE DE COTEJO.\n\n"
-        "----- texto para pegar -----\n"
+        "MANUAL MODE: REVIEW PENDING.\n"
+        f"Reason: {reason}.\n\n"
+        "Ask the user to paste this text into this database's AI chat (the «Ask AI» button, or Discuss with an AI agent) "
+        "and to paste the answer back to you. Until then, the proposal stays REVIEW PENDING.\n\n"
+        "----- text to paste -----\n"
         f"{context_message}\n\n{prompt}\n"
-        "----- fin -----"
+        "----- end -----"
     )
 
 

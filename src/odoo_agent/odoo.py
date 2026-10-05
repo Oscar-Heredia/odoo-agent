@@ -1,8 +1,8 @@
-"""Conexión con una base Odoo por JSON-2: perfiles, clave del keyring y cliente.
+"""Connection to an Odoo database over JSON-2: profiles, keyring key and client.
 
-Una sesión trabaja con una sola base: el perfil de ODOO_PROFILE, el del .env
-del proyecto o el primero que se use, queda fijado. Así los datos de un cliente nunca acaban en la base ni
-en la IA de otro.
+A session works with a single database: the profile from ODOO_PROFILE, the one
+from the project's .env, or the first one used, stays pinned. That way one
+client's data never ends up in another client's database or AI.
 """
 
 import os
@@ -22,15 +22,16 @@ ENVIRONMENTS = ("prod", "staging", "test")
 KEYRING_SERVICE = "odoo-agent"
 READ_TIMEOUT = 30.0
 ERROR_PREFIXES = {
-    403: "Odoo denegó el acceso",
-    404: "No existe en esta base",
-    409: "Conflicto de bloqueo en Odoo; reintenta",
-    422: "Odoo rechazó la llamada",
+    403: "Odoo denied access",
+    404: "Not found in this database",
+    409: "Lock conflict in Odoo; retry",
+    422: "Odoo rejected the call",
 }
+NEW_API_KEY = "Preferences → Account Security → New API Key"
 
 
 class OdooError(Exception):
-    """Fallo de Odoo o de la conexión, con un mensaje pensado para el agente."""
+    """Odoo or connection failure, with a message written for the agent."""
 
 
 @dataclass(frozen=True)
@@ -51,18 +52,18 @@ def profiles_path() -> Path:
 def load_profiles(path: Path | None = None) -> dict[str, Profile]:
     path = path or profiles_path()
     if not path.exists():
-        raise OdooError(f"No existe {path}. Créalo a partir de profiles.example.toml del repo odoo-agent.")
+        raise OdooError(f"{path} does not exist. Create it from profiles.example.toml in the odoo-agent repo.")
     with path.open("rb") as f:
         data = tomllib.load(f)
     profiles = {}
     for name, raw in data.get("profiles", {}).items():
         missing = [key for key in ("url", "hosting", "env") if key not in raw]
         if missing:
-            raise OdooError(f"Al perfil {name} le falta {', '.join(missing)} en {path}.")
+            raise OdooError(f"Profile {name} is missing {', '.join(missing)} in {path}.")
         if raw["hosting"] not in HOSTINGS:
-            raise OdooError(f"Perfil {name}: hosting tiene que ser {', '.join(HOSTINGS)}.")
+            raise OdooError(f"Profile {name}: hosting must be one of {', '.join(HOSTINGS)}.")
         if raw["env"] not in ENVIRONMENTS:
-            raise OdooError(f"Perfil {name}: env tiene que ser {', '.join(ENVIRONMENTS)}.")
+            raise OdooError(f"Profile {name}: env must be one of {', '.join(ENVIRONMENTS)}.")
         profiles[name] = Profile(
             name=name,
             url=raw["url"].rstrip("/"),
@@ -75,7 +76,7 @@ def load_profiles(path: Path | None = None) -> dict[str, Profile]:
 
 
 def keyring_api_key(profile: Profile) -> str:
-    """Clave API del perfil, leída de GNOME Keyring. Nunca se guarda en disco."""
+    """The profile's API key, read from GNOME Keyring. Never stored on disk."""
     store = f'secret-tool store --label "odoo-agent: {profile.name}" service {KEYRING_SERVICE} profile {profile.name}'
     try:
         result = subprocess.run(
@@ -85,20 +86,20 @@ def keyring_api_key(profile: Profile) -> str:
             timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise OdooError(f"No se pudo leer el keyring: {e}") from None
+        raise OdooError(f"Could not read the keyring: {e}") from None
     key = result.stdout.strip()
     if result.returncode != 0 or not key:
-        # secret-tool no dice nada si la clave no existe; si escribe algo, es que falló el keyring.
+        # secret-tool prints nothing when the key does not exist; any output means the keyring failed.
         detail = f" (secret-tool: {result.stderr.strip()})" if result.stderr.strip() else ""
         raise OdooError(
-            f"No hay clave API del perfil {profile.name} en el keyring{detail}. "
-            f"Guárdala desde una terminal con: {store}"
+            f"No API key for profile {profile.name} in the keyring{detail}. "
+            f"Store it from a terminal with: {store}"
         )
     return key
 
 
 def env_file() -> Path | None:
-    """El .env del proyecto: el de ODOO_ENV_FILE o, si no, el del directorio actual."""
+    """The project's .env: the one in ODOO_ENV_FILE or, failing that, the one in the current directory."""
     explicit = os.environ.get("ODOO_ENV_FILE")
     if explicit:
         return Path(explicit)
@@ -107,9 +108,9 @@ def env_file() -> Path | None:
 
 
 def load_env(path: Path) -> tuple[Profile, str]:
-    """Perfil y clave API de un .env de proyecto (KEY=VALUE, admite comentarios # y comillas)."""
+    """Profile and API key from a project .env (KEY=VALUE, with # comments and quotes)."""
     if not path.exists():
-        raise OdooError(f"No existe {path}.")
+        raise OdooError(f"{path} does not exist.")
     values = {}
     for line in path.read_text().splitlines():
         line = line.strip()
@@ -124,16 +125,15 @@ def load_env(path: Path) -> tuple[Profile, str]:
         values[key.strip()] = value
     missing = [key for key in ("ODOO_URL", "ODOO_HOSTING", "ODOO_ENV") if not values.get(key)]
     if missing:
-        raise OdooError(f"Falta {', '.join(missing)} en {path}.")
+        raise OdooError(f"{', '.join(missing)} missing in {path}.")
     if values["ODOO_HOSTING"] not in HOSTINGS:
-        raise OdooError(f"{path}: ODOO_HOSTING tiene que ser {', '.join(HOSTINGS)}.")
+        raise OdooError(f"{path}: ODOO_HOSTING must be one of {', '.join(HOSTINGS)}.")
     if values["ODOO_ENV"] not in ENVIRONMENTS:
-        raise OdooError(f"{path}: ODOO_ENV tiene que ser {', '.join(ENVIRONMENTS)}.")
+        raise OdooError(f"{path}: ODOO_ENV must be one of {', '.join(ENVIRONMENTS)}.")
     key = values.get("ODOO_API_KEY")
     if not key:
         raise OdooError(
-            f"No hay clave API en {path}. Créala en Odoo (Preferencias → Seguridad de la cuenta → "
-            "Nueva clave API) y pégala en ODOO_API_KEY=."
+            f"No API key in {path}. Create one in Odoo ({NEW_API_KEY}) and paste it after ODOO_API_KEY=."
         )
     profile = Profile(
         name=values.get("ODOO_PROFILE") or path.resolve().parent.name,
@@ -147,10 +147,10 @@ def load_env(path: Path) -> tuple[Profile, str]:
 
 
 def source_branch(version: str) -> str:
-    """Rama de las fuentes para una versión de servidor: 'saas~19.2+e' → 'saas-19.2'."""
+    """Source branch for a server version: 'saas~19.2+e' → 'saas-19.2'."""
     match = re.match(r"(saas~)?(\d+)\.(\d+)", version)
     if not match:
-        raise OdooError(f"Versión de Odoo no reconocida: {version}")
+        raise OdooError(f"Unrecognized Odoo version: {version}")
     saas, major, minor = match.groups()
     return f"{'saas-' if saas else ''}{major}.{minor}"
 
@@ -169,17 +169,17 @@ class OdooClient:
         try:
             response = await self._http.get("/json/version")
         except httpx2.HTTPError as e:
-            raise OdooError(f"No se pudo conectar con {self.profile.url}: {e}") from None
+            raise OdooError(f"Could not connect to {self.profile.url}: {e}") from None
         if response.status_code != 200:
             raise _odoo_error(response, self.profile)
         return response.json()
 
     async def read(self, model: str, method: str, params: dict) -> Any:
-        """La única vía de lectura: todo pasa por la lista blanca de guard."""
+        """The only read path: everything goes through the guard's whitelist."""
         return await self._call(model, method, guard.prepare_read(model, method, params))
 
     async def direct_response(self, agent_id: int, prompt: str, context_message: str, timeout: float) -> Any:
-        """La única llamada que no es pura lectura: pide su opinión a un agente de la app IA."""
+        """The only call that is not a pure read: asks an agent of the AI app for its opinion."""
         payload = {
             "ids": [agent_id],
             "prompt": prompt,
@@ -192,16 +192,16 @@ class OdooClient:
         try:
             response = await self._http.post(f"/json/2/{model}/{method}", json=payload, timeout=timeout)
         except httpx2.TimeoutException:
-            raise OdooError(f"Odoo no respondió en {timeout:.0f} s a {model}.{method}.") from None
+            raise OdooError(f"Odoo did not answer {model}.{method} within {timeout:.0f} s.") from None
         except httpx2.HTTPError as e:
-            raise OdooError(f"No se pudo conectar con {self.profile.url}: {e}") from None
+            raise OdooError(f"Could not connect to {self.profile.url}: {e}") from None
         if response.status_code != 200:
             raise _odoo_error(response, self.profile)
         return response.json()
 
 
 class Session:
-    """Una sesión, una base."""
+    """One session, one database."""
 
     def __init__(
         self, load=None, api_key=None, transport=None, preset: str | None = None, env_path: Path | None = None
@@ -209,14 +209,14 @@ class Session:
         self.preset = preset if preset is not None else os.environ.get("ODOO_PROFILE") or None
         if load is None and api_key is None and self.preset is None:
             env_path = env_path or env_file()
-        # Proyecto con .env: su perfil es el único de la sesión. Se lee al usarlo, así
-        # un .env sin clave no tumba el servidor y basta con rellenarlo y reintentar.
+        # Project with a .env: its profile is the session's only one. It is read on use,
+        # so a .env without a key does not bring the server down; fill it in and retry.
         self.env_path = env_path
         self._load = load or load_profiles
         self._api_key = api_key or keyring_api_key
         self._transport = transport
         self.client: OdooClient | None = None
-        # Lo que server_info detecta de la base; el cotejo lo reutiliza.
+        # What server_info detects about the database; the review reuses it.
         self.facts: dict = {}
 
     def _use_env(self) -> None:
@@ -234,18 +234,18 @@ class Session:
         if self.client is not None:
             if name != self.client.profile.name:
                 raise OdooError(
-                    f"Esta sesión está fijada al perfil {self.client.profile.name}. "
-                    f"Para trabajar con {name}, abre otra sesión: odoo {name}"
+                    f"This session is pinned to profile {self.client.profile.name}. "
+                    f"To work with {name}, open another session: odoo {name}"
                 )
             return self.client
         if self.preset and name != self.preset:
             raise OdooError(
-                f"Esta sesión se abrió para el perfil {self.preset}. "
-                f"Para trabajar con {name}, abre otra sesión: odoo {name}"
+                f"This session was opened for profile {self.preset}. "
+                f"To work with {name}, open another session: odoo {name}"
             )
         profiles = self._load()
         if name not in profiles:
-            raise OdooError(f"No existe el perfil {name}. Perfiles: {', '.join(sorted(profiles)) or 'ninguno'}.")
+            raise OdooError(f"Profile {name} does not exist. Profiles: {', '.join(sorted(profiles)) or 'none'}.")
         profile = profiles[name]
         self.client = OdooClient(profile, self._api_key(profile), self._transport)
         return self.client
@@ -256,15 +256,14 @@ class Session:
         self._use_env()
         if self.preset:
             return self.bind(self.preset)
-        raise OdooError("Todavía no hay base fijada en esta sesión: llama a server_info con el nombre del perfil.")
+        raise OdooError("No database is pinned to this session yet: call server_info with the profile name.")
 
 
 def _odoo_error(response: httpx2.Response, profile: Profile) -> OdooError:
     if response.status_code == 401:
         return OdooError(
-            f"Clave API inválida o caducada para {profile.name}. Crea otra en Odoo "
-            "(Preferencias → Seguridad de la cuenta → Nueva clave API) y vuelve a guardarla "
-            "en el keyring o en el .env del proyecto."
+            f"Invalid or expired API key for {profile.name}. Create another one in Odoo "
+            f"({NEW_API_KEY}) and store it again in the keyring or in the project's .env."
         )
     try:
         body = response.json()
@@ -272,5 +271,5 @@ def _odoo_error(response: httpx2.Response, profile: Profile) -> OdooError:
     except (ValueError, AttributeError):
         message = None
     message = message or response.text[:300] or response.reason_phrase
-    prefix = ERROR_PREFIXES.get(response.status_code, f"Error {response.status_code} de Odoo")
+    prefix = ERROR_PREFIXES.get(response.status_code, f"Odoo error {response.status_code}")
     return OdooError(f"{prefix}: {message}")

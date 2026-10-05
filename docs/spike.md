@@ -1,57 +1,57 @@
 # Spike
 
-## Comprobado (2026-10-04)
+## Verified (2026-10-04)
 
-### En el código de Odoo 19.0 (community, `~/dev/odoo-src/19.0/odoo`)
+### In the Odoo 19.0 code (community, `~/dev/odoo-src/19.0/odoo`)
 
-- **Versión.** `/json/version` (y `/web/version`) devuelve `{"version_info", "version"}`, con valores como `19.0` o `saas~19.2+e`. Fuente: `addons/rpc/controllers/__init__.py`.
-- **Llamadas.** `POST /json/2/<modelo>/<método>` usa `auth='bearer'`. Recibe `ids`, `context` y el resto como argumentos con nombre, y devuelve los recordsets como ids. Fuente: `addons/rpc/controllers/json2.py`.
-- **Errores.** El cuerpo trae `name`, `message`, `arguments`, `context` y `debug` (la traza completa). Fuente: `serialize_exception` en `odoo/http.py`. El cliente usa `message` y no pasa `debug` al agente.
-- **Métodos de lectura:**
-  - `formatted_read_group(domain, groupby, aggregates, having, offset, limit, order)`, con `domain` obligatorio (`addons/web/models/models.py`).
-  - `get_views(views, options)`, con `@api.readonly`.
+- **Version.** `/json/version` (and `/web/version`) returns `{"version_info", "version"}`, with values such as `19.0` or `saas~19.2+e`. Source: `addons/rpc/controllers/__init__.py`.
+- **Calls.** `POST /json/2/<model>/<method>` uses `auth='bearer'`. It takes `ids`, `context` and the rest as keyword arguments, and returns recordsets as ids. Source: `addons/rpc/controllers/json2.py`.
+- **Errors.** The body carries `name`, `message`, `arguments`, `context` and `debug` (the full traceback). Source: `serialize_exception` in `odoo/http.py`. The client uses `message` and does not pass `debug` to the agent.
+- **Read methods:**
+  - `formatted_read_group(domain, groupby, aggregates, having, offset, limit, order)`, with `domain` required (`addons/web/models/models.py`).
+  - `get_views(views, options)`, with `@api.readonly`.
   - `fields_get(allfields, attributes)`.
-- **Modelos técnicos.** Los campos que usan `model_info` y las recetas del agente existen en 19.0. En `ir.ui.view`, `groups_id` pasa a llamarse `group_ids`.
+- **Technical models.** The fields used by `model_info` and by the agent's recipes exist in 19.0. In `ir.ui.view`, `groups_id` is renamed to `group_ids`.
 
-### En Claude Code 2.1.289
+### In Claude Code 2.1.289
 
-- El agente se carga desde el symlink de `~/.claude/agents`.
-- Con `tools: Read, Grep, Glob, Edit, Write, mcp__odoo`, el agente no tiene Bash.
-- El servidor declarado en `mcpServers` se conecta al arrancar el agente, y sus herramientas se llaman `mcp__odoo__<herramienta>`.
-- El entorno llega al proceso MCP (`ODOO_PROFILE`, `XDG_CONFIG_HOME`, D-Bus), y `secret-tool` funciona desde él.
+- The agent loads from the symlink in `~/.claude/agents`.
+- With `tools: Read, Grep, Glob, Edit, Write, mcp__odoo`, the agent has no Bash.
+- The server declared in `mcpServers` connects when the agent starts, and its tools are named `mcp__odoo__<tool>`.
+- The environment reaches the MCP process (`ODOO_PROFILE`, `XDG_CONFIG_HOME`, D-Bus), and `secret-tool` works from it.
 
-### Contra un Odoo simulado (`httpx2.MockTransport`)
+### Against a mocked Odoo (`httpx2.MockTransport`)
 
-- Las 7 herramientas.
-- "Una sesión, una base".
-- La cabecera bearer y `bin_size`.
-- El enmascarado de secretos.
-- El cotejo automático, y el paso a modo manual cuando el método no existe o el agente IA tiene temas sin verificar.
+- The 7 tools.
+- "One session, one database".
+- The bearer header and `bin_size`.
+- Secret masking.
+- The automatic review, and the switch to manual mode when the method does not exist or the AI agent has unverified topics.
 
-### Contra pruebas11-grupogr (19.0+e, Odoo Online)
+### Against pruebas11-grupogr (19.0+e, Odoo Online)
 
-- **2026-10-05, `get_direct_response`:** existe y responde, con «Default Agent» (GPT-4o) y con «Ask AI» (Gemini 2.5 Flash).
-- **Agentes de serie:**
-  - `ai.ai_default_agent`: «Default Agent», sin temas.
+- **2026-10-05, `get_direct_response`:** it exists and answers, with «Default Agent» (GPT-4o) and with «Ask AI» (Gemini 2.5 Flash).
+- **Standard agents:**
+  - `ai.ai_default_agent`: «Default Agent», no topics.
   - `ai.ai_agent_natural_language_search`: «Ask AI».
-  - `ai_website.website_page_generator_agent`: sin temas.
-- **Temas de Ask AI:**
-  - `ai.ai_topic_natural_language_query`, con 8 herramientas: adjust_search, compute_report_measures, get_fields, get_menu_details y open_menu_graph, kanban, list y pivot.
-  - `ai.ai_topic_information_retrieval_query`, con 3: get_fields, search y read_group.
-- **Herramientas:** sus xmlids son `ai.ir_actions_server_<nombre>`. El código de cada una es una sola línea, `ai['result'] = record._ai_tool_<nombre>(argumentos)`. Con eso se rellenaron `READONLY_TOPICS` y `READONLY_TOOLS`, y `check_agents` compara el código de cada herramienta con esa llamada.
-- **Tiempo de espera:** Ask AI desde el chat del navegador falló una vez con `ReadTimeout` (Odoo espera 30 s a Gemini). Por API, la consulta trivial de `smoke.py --cotejo` tardó 22 s y la IA consultó `ir.logging` por su cuenta.
+  - `ai_website.website_page_generator_agent`: no topics.
+- **Ask AI topics:**
+  - `ai.ai_topic_natural_language_query`, with 8 tools: adjust_search, compute_report_measures, get_fields, get_menu_details and open_menu_graph, kanban, list and pivot.
+  - `ai.ai_topic_information_retrieval_query`, with 3: get_fields, search and read_group.
+- **Tools:** their xmlids are `ai.ir_actions_server_<name>`. Each one's code is a single line, `ai['result'] = record._ai_tool_<name>(arguments)`. `READONLY_TOPICS` and `READONLY_TOOLS` were filled in from this, and `check_agents` compares each tool's code with that call.
+- **Timeout:** Ask AI from the browser chat failed once with `ReadTimeout` (Odoo waits 30 s for Gemini). Over the API, the trivial query of `smoke.py --review` took 22 s and the AI queried `ir.logging` on its own.
 
-## Pendiente
+## Pending
 
-### Código de enterprise (necesita acceso SSH a `odoo/enterprise`)
+### Enterprise code (needs SSH access to `odoo/enterprise`)
 
-- **Métodos `_ai_tool_*` de `enterprise/ai`:** confirmar que su cuerpo solo lee (search, read_group, fields_get) o devuelve acciones de vista. Hoy la lista blanca se apoya en su nombre y en que el código de la herramienta solo los llama.
-- ¿Existe `get_direct_response` en saas-19.x y en 20.0? Comprobado solo en 19.0.
-- En Odoo 20, qué cambia: sesiones asíncronas y créditos IAP.
+- **`_ai_tool_*` methods in `enterprise/ai`:** confirm that their bodies only read (search, read_group, fields_get) or return view actions. Today the whitelist relies on their names and on the tool code only calling them.
+- Does `get_direct_response` exist in saas-19.x and 20.0? Verified only in 19.0.
+- What changes in Odoo 20: asynchronous sessions and IAP credits.
 
-### Contra una base de prueba (necesita perfil y clave)
+### Against a test database (needs a profile and a key)
 
-- Qué filas escribe `get_direct_response`: comparar `mail.message` y `ai.*` antes y después.
-- Si `get_views` quita nodos según los grupos del usuario de la clave.
-- El JSON de error de una clave caducada (401) y de un método inexistente (404).
-- Que la consulta a la IA quepa en unos 100 s en Odoo.sh. En Online cabe: 22 s con Ask AI en pruebas11 (consulta trivial).
+- Which rows `get_direct_response` writes: compare `mail.message` and `ai.*` before and after.
+- Whether `get_views` strips nodes according to the key user's groups.
+- The error JSON of an expired key (401) and of a missing method (404).
+- That the AI query fits in about 100 s on Odoo.sh. On Online it fits: 22 s with Ask AI on pruebas11 (trivial query).

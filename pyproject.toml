@@ -1,7 +1,7 @@
 [project]
 name = "odoo-agent"
 version = "0.1.0"
-description = "Servidor MCP de solo lectura para Odoo 19+ con cotejo en la IA de Odoo"
+description = "Read-only MCP server for Odoo 19+ that cross-checks with the Odoo AI"
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=2.3,<3",

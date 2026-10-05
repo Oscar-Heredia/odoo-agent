@@ -1,13 +1,13 @@
-# Copia este archivo a ~/.config/odoo-agent/profiles.toml y añade una sección por base.
-# Aquí no van claves: la de cada perfil se guarda en GNOME Keyring con
-#   secret-tool store --label "odoo-agent: <perfil>" service odoo-agent profile <perfil>
+# Copy this file to ~/.config/odoo-agent/profiles.toml and add one section per database.
+# No keys go here: each profile's key is stored in GNOME Keyring with
+#   secret-tool store --label "odoo-agent: <profile>" service odoo-agent profile <profile>
 
 [profiles.acme-prod]
 url = "https://acme.odoo.com"
 hosting = "online"          # online | odoo.sh | onpremise
 env = "prod"                # prod | staging | test
-# db = "acme"               # solo si el servidor aloja varias bases y no las distingue por dominio
-# ai_agent = "Odoo Agent"   # agente de la app IA para el cotejo; por defecto, el primero que pase la revisión
+# db = "acme"               # only if the server hosts several databases and does not tell them apart by domain
+# ai_agent = "Ask AI"       # AI app agent for the review; by default, the first one that passes the check
 
 [profiles.acme-staging]
 url = "https://acme-staging-12345678.dev.odoo.com"
