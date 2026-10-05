@@ -1,7 +1,7 @@
 """Conexión con una base Odoo por JSON-2: perfiles, clave del keyring y cliente.
 
-Una sesión trabaja con una sola base: el perfil de ODOO_PROFILE, o el primero
-que se use, queda fijado. Así los datos de un cliente nunca acaban en la base ni
+Una sesión trabaja con una sola base: el perfil de ODOO_PROFILE, el del .env
+del proyecto o el primero que se use, queda fijado. Así los datos de un cliente nunca acaban en la base ni
 en la IA de otro.
 """
 
@@ -97,6 +97,55 @@ def keyring_api_key(profile: Profile) -> str:
     return key
 
 
+def env_file() -> Path | None:
+    """El .env del proyecto: el de ODOO_ENV_FILE o, si no, el del directorio actual."""
+    explicit = os.environ.get("ODOO_ENV_FILE")
+    if explicit:
+        return Path(explicit)
+    path = Path.cwd() / ".env"
+    return path if path.exists() else None
+
+
+def load_env(path: Path) -> tuple[Profile, str]:
+    """Perfil y clave API de un .env de proyecto (KEY=VALUE, admite comentarios # y comillas)."""
+    if not path.exists():
+        raise OdooError(f"No existe {path}.")
+    values = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        value = value.strip()
+        if len(value) > 1 and value[0] in "\"'" and value.endswith(value[0]):
+            value = value[1:-1]
+        else:
+            value = re.split(r"\s+#", value, maxsplit=1)[0]
+        values[key.strip()] = value
+    missing = [key for key in ("ODOO_URL", "ODOO_HOSTING", "ODOO_ENV") if not values.get(key)]
+    if missing:
+        raise OdooError(f"Falta {', '.join(missing)} en {path}.")
+    if values["ODOO_HOSTING"] not in HOSTINGS:
+        raise OdooError(f"{path}: ODOO_HOSTING tiene que ser {', '.join(HOSTINGS)}.")
+    if values["ODOO_ENV"] not in ENVIRONMENTS:
+        raise OdooError(f"{path}: ODOO_ENV tiene que ser {', '.join(ENVIRONMENTS)}.")
+    key = values.get("ODOO_API_KEY")
+    if not key:
+        raise OdooError(
+            f"No hay clave API en {path}. Créala en Odoo (Preferencias → Seguridad de la cuenta → "
+            "Nueva clave API) y pégala en ODOO_API_KEY=."
+        )
+    profile = Profile(
+        name=values.get("ODOO_PROFILE") or path.resolve().parent.name,
+        url=values["ODOO_URL"].rstrip("/"),
+        hosting=values["ODOO_HOSTING"],
+        env=values["ODOO_ENV"],
+        db=values.get("ODOO_DB") or None,
+        ai_agent=values.get("ODOO_AI_AGENT") or None,
+    )
+    return profile, key
+
+
 def source_branch(version: str) -> str:
     """Rama de las fuentes para una versión de servidor: 'saas~19.2+e' → 'saas-19.2'."""
     match = re.match(r"(saas~)?(\d+)\.(\d+)", version)
@@ -154,19 +203,34 @@ class OdooClient:
 class Session:
     """Una sesión, una base."""
 
-    def __init__(self, load=load_profiles, api_key=keyring_api_key, transport=None, preset: str | None = None):
-        self._load = load
-        self._api_key = api_key
-        self._transport = transport
+    def __init__(
+        self, load=None, api_key=None, transport=None, preset: str | None = None, env_path: Path | None = None
+    ):
         self.preset = preset if preset is not None else os.environ.get("ODOO_PROFILE") or None
+        if load is None and api_key is None and self.preset is None:
+            env_path = env_path or env_file()
+        # Proyecto con .env: su perfil es el único de la sesión. Se lee al usarlo, así
+        # un .env sin clave no tumba el servidor y basta con rellenarlo y reintentar.
+        self.env_path = env_path
+        self._load = load or load_profiles
+        self._api_key = api_key or keyring_api_key
+        self._transport = transport
         self.client: OdooClient | None = None
         # Lo que server_info detecta de la base; el cotejo lo reutiliza.
         self.facts: dict = {}
 
+    def _use_env(self) -> None:
+        if self.env_path is None or self.client is not None:
+            return
+        profile, key = load_env(self.env_path)
+        self._load, self._api_key, self.preset = (lambda: {profile.name: profile}), (lambda _: key), profile.name
+
     def profiles(self) -> dict[str, Profile]:
+        self._use_env()
         return self._load()
 
     def bind(self, name: str) -> OdooClient:
+        self._use_env()
         if self.client is not None:
             if name != self.client.profile.name:
                 raise OdooError(
@@ -189,6 +253,7 @@ class Session:
     def current(self) -> OdooClient:
         if self.client is not None:
             return self.client
+        self._use_env()
         if self.preset:
             return self.bind(self.preset)
         raise OdooError("Todavía no hay base fijada en esta sesión: llama a server_info con el nombre del perfil.")
@@ -198,7 +263,8 @@ def _odoo_error(response: httpx2.Response, profile: Profile) -> OdooError:
     if response.status_code == 401:
         return OdooError(
             f"Clave API inválida o caducada para {profile.name}. Crea otra en Odoo "
-            "(Preferencias → Seguridad de la cuenta → Nueva clave API) y vuelve a guardarla en el keyring."
+            "(Preferencias → Seguridad de la cuenta → Nueva clave API) y vuelve a guardarla "
+            "en el keyring o en el .env del proyecto."
         )
     try:
         body = response.json()

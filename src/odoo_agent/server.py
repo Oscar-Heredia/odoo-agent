@@ -54,13 +54,13 @@ session = Session()
 async def server_info(profile: str | None = None) -> str:
     """Fija la base de esta sesión y la resume. Sin perfil, lista los perfiles disponibles.
 
-    Devuelve versión, edición, hosting y entorno, módulos clave y propios (no de Odoo S.A.),
+    Devuelve versión, edición, hosting y entorno, módulos clave y propios (ni de Odoo ni de sus fuentes),
     compañías, agentes de la app IA (y si se pueden consultar) y dónde están las fuentes
     de esa versión. Una vez fijada, la sesión no puede cambiar de base.
     """
 
     async def run():
-        if profile is None and session.client is None and not session.preset:
+        if profile is None and session.client is None and not session.preset and session.env_path is None:
             return {
                 "perfiles": [
                     {"nombre": p.name, "url": p.url, "hosting": p.hosting, "env": p.env}
@@ -265,6 +265,12 @@ async def _available(client: OdooClient, model: str, wanted: list[str]) -> list[
     return [name for name in wanted if name in existing]
 
 
+def own_modules_only(modules: list[dict], sources: Path) -> list[dict]:
+    """Quita los módulos que vienen en las fuentes de Odoo de esa rama (p. ej. l10n_mx, de Vauxoo)."""
+    roots = [sources / "odoo" / "addons", sources / "odoo" / "odoo" / "addons", sources / "enterprise"]
+    return [m for m in modules if not any((root / m["name"] / "__manifest__.py").exists() for root in roots)]
+
+
 async def _describe(client: OdooClient) -> dict:
     version = (await client.version())["version"]
     branch = source_branch(version)
@@ -275,14 +281,15 @@ async def _describe(client: OdooClient) -> dict:
     )
     installed = {row["name"] for row in installed}
     installed_count = await client.read("ir.module.module", "search_count", {"domain": [["state", "=", "installed"]]})
-    own_modules = await client.read(
+    candidates = await client.read(
         "ir.module.module", "search_read",
         {
-            "domain": [["state", "=", "installed"], ["author", "not ilike", "Odoo S.A."]],
+            "domain": [["state", "=", "installed"], ["author", "not ilike", "odoo"], ["author", "not ilike", "openerp"]],
             "fields": ["name", "shortdesc", "author", "latest_version"],
             "limit": 300,
         },
     )
+    own_modules = own_modules_only(candidates, sources)
     companies = await client.read(
         "res.company", "search_read", {"domain": [], "fields": ["name", "country_id", "currency_id"], "limit": 50}
     )

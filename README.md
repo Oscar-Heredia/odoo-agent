@@ -65,6 +65,19 @@ Si no hay agente válido, si el método no existe en esa versión o si la llamad
    ```
 3. Cuando la clave caduque, el agente te lo dirá. Crea otra en Odoo (Preferencias → Seguridad de la cuenta → Nueva clave API) y repite el paso 2.
 
+### Proyecto con .env
+
+En vez de un perfil y el keyring, una carpeta de proyecto puede llevar un `.env`:
+
+- obligatorias: `ODOO_URL`, `ODOO_HOSTING`, `ODOO_ENV` y `ODOO_API_KEY`;
+- opcionales: `ODOO_PROFILE` (por defecto, el nombre de la carpeta), `ODOO_DB` y `ODOO_AI_AGENT`.
+
+Desde esa carpeta, `odoo` sin perfil abre la sesión sobre esa base. Protege el `.env`:
+
+- `chmod 600`;
+- ponlo en `.gitignore`;
+- deniega `Read(./.env)` en `.claude/settings.json`, para que la clave no acabe en las transcripciones.
+
 ## Uso
 
 ```
