@@ -19,6 +19,7 @@ odoo-agent/
 │   └── odoo-dev.md         instructions for the odoo-dev agent
 ├── docs/
 │   └── spike.md            what has been verified and what is pending
+├── skills/                 Odoo's official skills, vendored (see skills/UPSTREAM.md)
 ├── scripts/
 │   ├── smoke.py            smoke test against a database (--review)
 │   └── odoo-src.sh         downloads the Odoo sources
@@ -31,7 +32,8 @@ odoo-agent/
     ├── test_guard.py
     ├── test_env.py
     ├── test_own_modules.py
-    └── test_review.py
+    ├── test_review.py
+    └── test_skills.py         vendored skills and the agent's references to them
 ```
 
 ## How it is built
@@ -42,6 +44,7 @@ odoo-agent/
   - `odoo.py`: profiles, keyring and JSON-2 client.
   - `review.py`: the cross-check.
   - `server.py`: the 7 tools.
+- `skills/`: Odoo's official skills for writing and reviewing addon code (see «Odoo's official skills»).
 - `scripts/odoo-src.sh`: downloads the Odoo sources (odoo, enterprise, documentation) per branch into `~/dev/odoo-src/<branch>/`.
 - `scripts/smoke.py`: smoke test against a real database.
 
@@ -74,21 +77,28 @@ If the first one fails, for example because Gemini does not answer within the 30
 
 If there is no usable agent, the method does not exist in that version, or time runs out, it returns the text to paste by hand into the AI chat. The proposal stays **REVIEW PENDING**.
 
+## Odoo's official skills
+
+`skills/` holds four of the skills Odoo publishes in `odoo/odoo` (`odoo-guidelines`, `odoo-security`, `odoo-review`, `odoo-web-guidelines`), copied unchanged from branch 20.0; `skills/UPSTREAM.md` gives the commit and how to update them. The agent invokes them with the `Skill` tool when a step carries code, or when you ask it to review yours.
+
+They are written for Odoo 20.0. The agent lets the source of the database's branch win, and its prompt lists the known 19.0 differences: no `ir.access` model (access rights stay in `ir.model.access.csv` and `ir.rule`), `t-esc` still escapes and `t-raw` still renders raw HTML, and no `bearer_scope`. `odoo-git`, Odoo's own contribution rules, is left out.
+
 ## Installation
 
 1. Environment: `python3 -m venv .venv && .venv/bin/pip install -e . --group dev`.
    - With uv: `uv sync`, which uses the same `.venv`.
 2. Agent: `ln -s ~/dev/odoo-agent/agents/odoo-dev.md ~/.claude/agents/odoo-dev.md`.
-3. A fish function in `~/.config/fish/functions/odoo.fish`, to open one session per database:
+3. Skills: `for s in odoo-guidelines odoo-security odoo-review odoo-web-guidelines; ln -s ~/dev/odoo-agent/skills/$s ~/.claude/skills/$s; end`.
+4. A fish function in `~/.config/fish/functions/odoo.fish`, to open one session per database:
    ```fish
    function odoo --description 'odoo-dev agent on a database'
        ODOO_PROFILE=$argv[1] claude --agent odoo-dev --add-dir ~/dev/odoo-src $argv[2..]
    end
    ```
-4. Permissions in `~/.claude/settings.json`:
-   - `allow`: `mcp__odoo__server_info`, `mcp__odoo__search_read`, `mcp__odoo__group_by`, `mcp__odoo__fields`, `mcp__odoo__model_info`, `mcp__odoo__get_view` and `mcp__odoo__ask_odoo_ai`.
+5. Permissions in `~/.claude/settings.json`:
+   - `allow`: `mcp__odoo__server_info`, `mcp__odoo__search_read`, `mcp__odoo__group_by`, `mcp__odoo__fields`, `mcp__odoo__model_info`, `mcp__odoo__get_view` and `mcp__odoo__ask_odoo_ai`; plus `Read(~/.claude/skills/odoo-*/**)` and `Read(~/dev/odoo-agent/skills/**)`, so the agent can read the skills' `guidelines/` files.
    - `deny`: `Edit(~/dev/odoo-src/**)`, which also covers Write.
-5. Sources for every version you use: `scripts/odoo-src.sh 19.0`, `scripts/odoo-src.sh saas-19.2`…
+6. Sources for every version you use: `scripts/odoo-src.sh 19.0`, `scripts/odoo-src.sh saas-19.2`…
    - saas branches move: add `--update` to refresh them.
    - Enterprise needs your SSH access to GitHub.
 

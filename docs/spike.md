@@ -19,6 +19,7 @@
 - With `tools: Read, Grep, Glob, Edit, Write, mcp__odoo`, the agent has no Bash.
 - The server declared in `mcpServers` connects when the agent starts, and its tools are named `mcp__odoo__<tool>`.
 - The environment reaches the MCP process (`ODOO_PROFILE`, `XDG_CONFIG_HOME`, D-Bus), and `secret-tool` works from it.
+- 2026-10-09: with `--agent odoo-dev`, the `Skill` tool invokes the skills linked in `~/.claude/skills` without a prompt, but reading their `guidelines/*.md` needs the `Read(...)` allow rules (denied in `-p` mode without them).
 
 ### Against a mocked Odoo (`httpx2.MockTransport`)
 
@@ -27,6 +28,16 @@
 - The bearer header and `bin_size`.
 - Secret masking.
 - The automatic review, and the switch to manual mode when the method does not exist or the AI agent has unverified topics.
+
+### Odoo's official skills against 19.0 (2026-10-09)
+
+The skills in `skills/` come from `odoo/odoo` 20.0 (there is no `skills/` folder in 19.0 or saas-19.1 to saas-19.4). Checked in `~/dev/odoo-src/19.0/odoo`:
+
+- **Access rights.** There is no `ir.access` model: 220 `ir.model.access.csv` files (header `id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink`) and no `ir.access.csv`. Record restrictions are `ir.rule`.
+- **QWeb.** `_compile_directive_esc` and `_compile_directive_raw` both return `_compile_directive_out` (`odoo/addons/base/models/ir_qweb.py:2487` and following). For `t-esc` it escapes like `t-out`; for `t-raw` it wraps the value in `Markup` first (`ir_qweb.py:2433-2437`), so `t-raw` still renders unescaped HTML. The skills' 20.0 claims (`t-raw` gone, `t-esc` renders nothing) do not hold. Found by the agent itself in the second end-to-end review, after a wrong first reading of `_compile_directive_raw` only.
+- **Routes.** `auth='bearer'` exists (`odoo/http.py:777`), `bearer_scope` does not. `type='json2'` exists (`odoo/http.py:2634`).
+- **Same as 20.0.** `models.Constraint`/`Index`/`UniqueIndex` (`odoo/orm/table_objects.py`), `_sql_constraints` ignored with a warning (`odoo/orm/model_classes.py:162`), `self.env._`, `@api.private`, `fields.Domain`, `BaseCommon`, `allow_inherited_tests_method`, `expectUnloadPage`.
+- **Missing in 19.0.** The `--unsafe-policy` option (`odoo/tools/config.py`).
 
 ### Against pruebas11-grupogr (19.0+e, Odoo Online)
 
