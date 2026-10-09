@@ -8,6 +8,14 @@ A Claude Code agent (`odoo-dev`) for working with Odoo 19+ databases (Online, Od
 
 You apply the changes yourself.
 
+## Requirements
+
+- [Claude Code](https://claude.com/claude-code).
+- Python 3.12 or newer.
+- An Odoo 19+ database and an API key of an administrator user (Odoo has no read-only keys; see «Why it is read-only»).
+- Optional: the Odoo AI app in that database, for the cross-check. Without it, proposals are delivered as NOT REVIEWED.
+- To store keys: GNOME Keyring (`secret-tool`), or a project `.env`.
+
 ## Repository layout
 
 ```
@@ -85,20 +93,45 @@ They are written for Odoo 20.0. The agent lets the source of the database's bran
 
 ## Installation
 
-1. Environment: `python3 -m venv .venv && .venv/bin/pip install -e . --group dev`.
+The paths below assume the repository lives in `~/dev/odoo-agent`.
+
+1. Clone: `git clone https://github.com/Oscar-Heredia/odoo-agent.git ~/dev/odoo-agent && cd ~/dev/odoo-agent`.
+   - In `agents/odoo-dev.md`, set `mcpServers` → `command` to the absolute path of your `.venv/bin/odoo-mcp`. It ships with the author's path.
+2. Environment: `python3 -m venv .venv && .venv/bin/pip install -e . --group dev`.
    - With uv: `uv sync`, which uses the same `.venv`.
-2. Agent: `ln -s ~/dev/odoo-agent/agents/odoo-dev.md ~/.claude/agents/odoo-dev.md`.
-3. Skills: `for s in odoo-guidelines odoo-security odoo-review odoo-web-guidelines; ln -s ~/dev/odoo-agent/skills/$s ~/.claude/skills/$s; end`.
-4. A fish function in `~/.config/fish/functions/odoo.fish`, to open one session per database:
-   ```fish
-   function odoo --description 'odoo-dev agent on a database'
-       ODOO_PROFILE=$argv[1] claude --agent odoo-dev --add-dir ~/dev/odoo-src $argv[2..]
-   end
+3. Agent: `ln -s ~/dev/odoo-agent/agents/odoo-dev.md ~/.claude/agents/odoo-dev.md`.
+4. Skills: link each one into `~/.claude/skills/`:
+   ```sh
+   mkdir -p ~/.claude/skills
+   for s in odoo-guidelines odoo-security odoo-review odoo-web-guidelines; do
+     ln -s ~/dev/odoo-agent/skills/$s ~/.claude/skills/$s
+   done
    ```
-5. Permissions in `~/.claude/settings.json`:
+5. A shell function `odoo`, to open one session per database: `odoo <profile>`, or plain `odoo` in a folder with a `.env`.
+   - fish, in `~/.config/fish/functions/odoo.fish`:
+     ```fish
+     function odoo --description 'odoo-dev agent on a database'
+         if test (count $argv) -eq 0; and test -f $PWD/.env
+             ODOO_ENV_FILE=$PWD/.env claude --agent odoo-dev --add-dir ~/dev/odoo-src
+             return
+         end
+         ODOO_PROFILE=$argv[1] claude --agent odoo-dev --add-dir ~/dev/odoo-src $argv[2..]
+     end
+     ```
+   - bash or zsh, in `~/.bashrc` or `~/.zshrc`:
+     ```sh
+     odoo() {
+       if [ $# -eq 0 ] && [ -f "$PWD/.env" ]; then
+         ODOO_ENV_FILE="$PWD/.env" claude --agent odoo-dev --add-dir ~/dev/odoo-src
+       else
+         ODOO_PROFILE="$1" claude --agent odoo-dev --add-dir ~/dev/odoo-src "${@:2}"
+       fi
+     }
+     ```
+6. Permissions in `~/.claude/settings.json`:
    - `allow`: `mcp__odoo__server_info`, `mcp__odoo__search_read`, `mcp__odoo__group_by`, `mcp__odoo__fields`, `mcp__odoo__model_info`, `mcp__odoo__get_view` and `mcp__odoo__ask_odoo_ai`; plus `Read(~/.claude/skills/odoo-*/**)` and `Read(~/dev/odoo-agent/skills/**)`, so the agent can read the skills' `guidelines/` files.
    - `deny`: `Edit(~/dev/odoo-src/**)`, which also covers Write.
-6. Sources for every version you use: `scripts/odoo-src.sh 19.0`, `scripts/odoo-src.sh saas-19.2`…
+7. Sources for every version you use: `scripts/odoo-src.sh 19.0`, `scripts/odoo-src.sh saas-19.2`…
    - saas branches move: add `--update` to refresh them.
    - Enterprise needs your SSH access to GitHub.
 
@@ -142,3 +175,7 @@ Tests: `.venv/bin/python -m pytest`.
 Claude Code transcripts (`~/.claude/projects`) keep what the tools read. If you want them to last less, set `cleanupPeriodDays` in `~/.claude/settings.json`.
 
 Odoo's AI sends what it reads and what you ask it to its provider (OpenAI or Google), just as when you use it from the browser.
+
+## License
+
+The skills in `skills/` are Odoo S.A.'s, under LGPL-3, the license of the Odoo repository they come from (see `skills/UPSTREAM.md`).
