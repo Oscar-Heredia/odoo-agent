@@ -3,7 +3,7 @@ import asyncio
 import httpx2
 import pytest
 
-from odoo_agent.odoo import OdooError, Session, load_env, load_profiles
+from odoo_agent.odoo import OdooError, Session, env_file, load_env, load_profiles
 
 ENV = """\
 # Test project
@@ -149,6 +149,47 @@ def test_without_profiles_toml_the_choices_are_the_projects(tmp_path):
         "projects": ["acme", "beta"],
         "projects_folder": str(root),
     }
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ODOO_URL=\nODOO_API_KEY=\n",
+        # A copied .env.example: a real URL, but no key.
+        "ODOO_URL=https://example.odoo.com\nODOO_HOSTING=online\nODOO_ENV=prod\nODOO_API_KEY=\n",
+        "DATABASE_URL=postgres://app\n",
+    ],
+)
+def test_a_folder_env_without_url_and_key_is_not_a_project(tmp_path, monkeypatch, text):
+    """A template or another app's .env in the session's folder must not take the session over."""
+    write_env(tmp_path, text)
+    monkeypatch.chdir(tmp_path)
+    assert env_file() is None
+
+
+def test_a_folder_env_with_odoo_url_is_the_project(tmp_path, monkeypatch):
+    path = write_env(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert env_file() == path
+
+
+def test_a_project_name_works_from_a_folder_with_a_template_env(tmp_path, monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx2.Response(200, json={"version": "19.0"})
+
+    home = tmp_path / "home"
+    home.mkdir()
+    write_env(home, "ODOO_PROFILE=example\nODOO_URL=https://example.odoo.com\nODOO_HOSTING=online\nODOO_ENV=prod\nODOO_API_KEY=\n")
+    make_project(tmp_path / "proyectos", "acme")
+    monkeypatch.chdir(home)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("ODOO_PROJECTS_ROOT", str(tmp_path / "proyectos"))
+    session = Session(transport=httpx2.MockTransport(handler))
+    asyncio.run(session.bind("acme").version())
+    assert seen["url"] == "https://acme.odoo.com/json/version"
 
 
 def test_a_profiles_toml_profile_wins_over_a_project_with_its_name(tmp_path):

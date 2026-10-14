@@ -151,7 +151,7 @@ Instead of a profile and the keyring, a project folder can carry a `.env`:
 - required: `ODOO_URL`, `ODOO_HOSTING`, `ODOO_ENV` and `ODOO_API_KEY`;
 - optional: `ODOO_PROFILE` (defaults to the folder name), `ODOO_DB` and `ODOO_AI_AGENT`.
 
-From that folder, `odoo` without a profile opens the session on that database. From anywhere else, `server_info` takes the folder's name when the folder is in `~/dev/proyectos` (or in `ODOO_PROJECTS_ROOT`); a profile in `profiles.toml` with the same name wins. Protect the `.env`:
+From that folder, `odoo` without a profile opens the session on that database. From anywhere else, `server_info` takes the folder's name when the folder is in `~/dev/proyectos` (or in `ODOO_PROJECTS_ROOT`); a profile in `profiles.toml` with the same name wins. A `.env` in the session's folder without both `ODOO_URL` and `ODOO_API_KEY` (a template, a copied `.env.example`, another app's) is ignored, so it does not get in the way. Protect the `.env`:
 
 - `chmod 600`;
 - add it to `.gitignore`;

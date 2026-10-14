@@ -106,18 +106,25 @@ def keyring_api_key(profile: Profile) -> str:
 
 
 def env_file() -> Path | None:
-    """The project's .env: the one in ODOO_ENV_FILE or, failing that, the one in the current directory."""
+    """The project's .env: the one in ODOO_ENV_FILE or, failing that, the one in the current directory.
+
+    The current directory's only counts when it sets ODOO_URL and ODOO_API_KEY: a template, a copied
+    .env.example or another app's .env must not take the session over, or project names would stop
+    working from that folder. ODOO_ENV_FILE always counts, so a project still missing its key gets
+    the message telling to paste it.
+    """
     explicit = os.environ.get("ODOO_ENV_FILE")
     if explicit:
         return Path(explicit)
     path = Path.cwd() / ".env"
-    return path if path.exists() else None
-
-
-def load_env(path: Path) -> tuple[Profile, str]:
-    """Profile and API key from a project .env (KEY=VALUE, with # comments and quotes)."""
     if not path.exists():
-        raise OdooError(f"{path} does not exist.")
+        return None
+    values = _read_env(path)
+    return path if values.get("ODOO_URL") and values.get("ODOO_API_KEY") else None
+
+
+def _read_env(path: Path) -> dict[str, str]:
+    """KEY=VALUE lines, with # comments and quotes."""
     values = {}
     for line in path.read_text().splitlines():
         line = line.strip()
@@ -130,6 +137,14 @@ def load_env(path: Path) -> tuple[Profile, str]:
         else:
             value = re.split(r"\s+#", value, maxsplit=1)[0]
         values[key.strip()] = value
+    return values
+
+
+def load_env(path: Path) -> tuple[Profile, str]:
+    """Profile and API key from a project .env."""
+    if not path.exists():
+        raise OdooError(f"{path} does not exist.")
+    values = _read_env(path)
     missing = [key for key in ("ODOO_URL", "ODOO_HOSTING", "ODOO_ENV") if not values.get(key)]
     if missing:
         raise OdooError(f"{', '.join(missing)} missing in {path}.")
