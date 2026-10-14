@@ -44,7 +44,7 @@ mcp = MCPServer(
     log_level="WARNING",
     instructions=(
         "Reads an Odoo 19+ database over JSON-2, always read-only, and cross-checks with that same database's AI. "
-        "One session, one database: start by calling server_info with the profile."
+        "One session, one database: start by calling server_info with the profile or project name."
     ),
 )
 session = Session()
@@ -52,7 +52,10 @@ session = Session()
 
 @mcp.tool(annotations=READ_ONLY, structured_output=False)
 async def server_info(profile: str | None = None) -> str:
-    """Pins this session's database and summarizes it. Without a profile, lists the available profiles.
+    """Pins this session's database and summarizes it.
+
+    `profile` is a profiles.toml profile or the name of a project folder with a .env (in
+    ODOO_PROJECTS_ROOT, ~/dev/proyectos by default). Without it, lists both.
 
     Returns version, edition, hosting and environment, key and custom modules (neither from Odoo nor in
     its sources), companies, AI app agents (and whether they can be queried) and where the sources
@@ -62,11 +65,8 @@ async def server_info(profile: str | None = None) -> str:
     async def run():
         if profile is None and session.client is None and not session.preset and session.env_path is None:
             return {
-                "profiles": [
-                    {"name": p.name, "url": p.url, "hosting": p.hosting, "env": p.env}
-                    for p in session.profiles().values()
-                ],
-                "next": "Call server_info with the profile of the database you will work with.",
+                **session.choices(),
+                "next": "Call server_info with the profile or project of the database you will work with.",
             }
         client = session.bind(profile) if profile else session.current()
         return await _describe(client)

@@ -151,11 +151,11 @@ Instead of a profile and the keyring, a project folder can carry a `.env`:
 - required: `ODOO_URL`, `ODOO_HOSTING`, `ODOO_ENV` and `ODOO_API_KEY`;
 - optional: `ODOO_PROFILE` (defaults to the folder name), `ODOO_DB` and `ODOO_AI_AGENT`.
 
-From that folder, `odoo` without a profile opens the session on that database. Protect the `.env`:
+From that folder, `odoo` without a profile opens the session on that database. From anywhere else, `server_info` takes the folder's name when the folder is in `~/dev/proyectos` (or in `ODOO_PROJECTS_ROOT`); a profile in `profiles.toml` with the same name wins. Protect the `.env`:
 
 - `chmod 600`;
 - add it to `.gitignore`;
-- deny `Read(./.env)` in `.claude/settings.json`, so the key never ends up in transcripts.
+- deny reading it, so the key never ends up in transcripts. `Read(./.env)` in the project's `.claude/settings.json` only covers sessions opened in that folder, so also deny `Read(~/dev/proyectos/*/.env)` in `~/.claude/settings.json`.
 
 ## Usage
 
@@ -166,7 +166,7 @@ odoo <profile>
 
 A session works with a single database. For another database, open another session.
 
-Smoke test: `.venv/bin/python scripts/smoke.py <profile> [--review]`.
+Smoke test: `.venv/bin/python scripts/smoke.py <profile or project> [--review]`.
 
 Tests: `.venv/bin/python -m pytest`.
 

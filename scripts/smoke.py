@@ -1,6 +1,6 @@
 """Smoke test against a real database, using the same tools as the agent.
 
-    .venv/bin/python scripts/smoke.py <profile> [--review]
+    .venv/bin/python scripts/smoke.py <profile or project> [--review]
 
 Use a test or staging database. With --review it also sends a trivial query to
 the database's AI (in Odoo 20 this spends credits).

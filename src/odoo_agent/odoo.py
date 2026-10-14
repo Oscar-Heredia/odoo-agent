@@ -1,8 +1,9 @@
 """Connection to an Odoo database over JSON-2: profiles, keyring key and client.
 
 A session works with a single database: the profile from ODOO_PROFILE, the one
-from the project's .env, or the first one used, stays pinned. That way one
-client's data never ends up in another client's database or AI.
+from the project's .env, or the first one named (a profiles.toml profile or a
+project folder with a .env), stays pinned. That way one client's data never
+ends up in another client's database or AI.
 """
 
 import os
@@ -28,10 +29,16 @@ ERROR_PREFIXES = {
     422: "Odoo rejected the call",
 }
 NEW_API_KEY = "Preferences → Account Security → New API Key"
+# A project is named by its folder alone: no path, so the agent cannot leave the projects folder.
+PROJECT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class OdooError(Exception):
     """Odoo or connection failure, with a message written for the agent."""
+
+
+class ProfilesMissing(OdooError):
+    """There is no profiles.toml: the projects with a .env can still be used."""
 
 
 @dataclass(frozen=True)
@@ -52,7 +59,7 @@ def profiles_path() -> Path:
 def load_profiles(path: Path | None = None) -> dict[str, Profile]:
     path = path or profiles_path()
     if not path.exists():
-        raise OdooError(f"{path} does not exist. Create it from profiles.example.toml in the odoo-agent repo.")
+        raise ProfilesMissing(f"{path} does not exist. Create it from profiles.example.toml in the odoo-agent repo.")
     with path.open("rb") as f:
         data = tomllib.load(f)
     profiles = {}
@@ -146,6 +153,25 @@ def load_env(path: Path) -> tuple[Profile, str]:
     return profile, key
 
 
+def projects_root() -> Path:
+    """The folder with one subfolder per project, each with its .env."""
+    return Path(os.environ.get("ODOO_PROJECTS_ROOT") or Path.home() / "dev" / "proyectos")
+
+
+def project_env(name: str, root: Path) -> Path | None:
+    """The .env of project `name` in `root`, if that folder has one."""
+    if not PROJECT_NAME.match(name):
+        return None
+    path = root / name / ".env"
+    return path if path.is_file() else None
+
+
+def project_names(root: Path) -> list[str]:
+    if not root.is_dir():
+        return []
+    return sorted(p.parent.name for p in root.glob("*/.env") if p.is_file() and PROJECT_NAME.match(p.parent.name))
+
+
 def source_branch(version: str) -> str:
     """Source branch for a server version: 'saas~19.2+e' → 'saas-19.2'."""
     match = re.match(r"(saas~)?(\d+)\.(\d+)", version)
@@ -204,7 +230,13 @@ class Session:
     """One session, one database."""
 
     def __init__(
-        self, load=None, api_key=None, transport=None, preset: str | None = None, env_path: Path | None = None
+        self,
+        load=None,
+        api_key=None,
+        transport=None,
+        preset: str | None = None,
+        env_path: Path | None = None,
+        projects: Path | None = None,
     ):
         self.preset = preset if preset is not None else os.environ.get("ODOO_PROFILE") or None
         if load is None and api_key is None and self.preset is None:
@@ -212,6 +244,7 @@ class Session:
         # Project with a .env: its profile is the session's only one. It is read on use,
         # so a .env without a key does not bring the server down; fill it in and retry.
         self.env_path = env_path
+        self.projects = projects or projects_root()
         self._load = load or load_profiles
         self._api_key = api_key or keyring_api_key
         self._transport = transport
@@ -225,12 +258,32 @@ class Session:
         profile, key = load_env(self.env_path)
         self._load, self._api_key, self.preset = (lambda: {profile.name: profile}), (lambda _: key), profile.name
 
-    def profiles(self) -> dict[str, Profile]:
-        self._use_env()
-        return self._load()
+    def _toml_profiles(self) -> dict[str, Profile]:
+        try:
+            return self._load()
+        except ProfilesMissing:
+            return {}
+
+    def choices(self) -> dict:
+        """What server_info can pin: the profiles in profiles.toml and the project folders with a .env."""
+        return {
+            "profiles": [
+                {"name": p.name, "url": p.url, "hosting": p.hosting, "env": p.env}
+                for p in self._toml_profiles().values()
+            ],
+            "projects": project_names(self.projects),
+            "projects_folder": str(self.projects),
+        }
 
     def bind(self, name: str) -> OdooClient:
+        if self.client is None and self.env_path is None and not self.preset:
+            # A profiles.toml profile wins over a project folder with the same name.
+            project = project_env(name, self.projects)
+            if project is not None and name not in self._toml_profiles():
+                self.env_path = project
         self._use_env()
+        if self.env_path is not None and name == self.env_path.parent.name:
+            name = self.preset  # the project's folder name also names its profile
         if self.client is not None:
             if name != self.client.profile.name:
                 raise OdooError(
@@ -243,9 +296,15 @@ class Session:
                 f"This session was opened for profile {self.preset}. "
                 f"To work with {name}, open another session: odoo {name}"
             )
-        profiles = self._load()
+        profiles = self._load() if self.env_path is not None else self._toml_profiles()
         if name not in profiles:
-            raise OdooError(f"Profile {name} does not exist. Profiles: {', '.join(sorted(profiles)) or 'none'}.")
+            choices = self.choices()
+            raise OdooError(
+                f"No profile or project named {name}. "
+                f"Profiles: {', '.join(p['name'] for p in choices['profiles']) or 'none'}. "
+                f"Projects: {', '.join(choices['projects']) or 'none'} "
+                f"(folders with a .env in {choices['projects_folder']})."
+            )
         profile = profiles[name]
         self.client = OdooClient(profile, self._api_key(profile), self._transport)
         return self.client
@@ -256,7 +315,7 @@ class Session:
         self._use_env()
         if self.preset:
             return self.bind(self.preset)
-        raise OdooError("No database is pinned to this session yet: call server_info with the profile name.")
+        raise OdooError("No database is pinned to this session yet: call server_info with a profile or project name.")
 
 
 def _odoo_error(response: httpx2.Response, profile: Profile) -> OdooError:
