@@ -166,6 +166,8 @@ odoo <profile>
 
 A session works with a single database. For another database, open another session.
 
+From any other Claude Code session, odoo-dev also works as a subagent: ask it about standard Odoo, or name the project ("ask odoo-dev which custom modules grupogr-pruebas12 has"). A main session that can read the sources itself does not always delegate on its own, so name odoo-dev to be sure.
+
 Smoke test: `.venv/bin/python scripts/smoke.py <profile or project> [--review]`.
 
 Tests: `.venv/bin/python -m pytest`.
